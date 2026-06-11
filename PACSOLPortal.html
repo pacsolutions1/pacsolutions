@@ -1363,9 +1363,23 @@ document.querySelectorAll('a[href^="#"]').forEach(a=>{
 var SUPA_URL = 'https://xornrrkikfbldrcozknd.supabase.co';
 var SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhvcm5ycmtpa2ZibGRyY296a25kIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwNDA1NjgsImV4cCI6MjA5NjYxNjU2OH0.33XiF-DzFeSohZ8wUNBapk5KRzN-CffTwnYG7ilGqO4';
 var _supa = null;
+var _supaLoading = null;
 
-// Load Supabase JS synchronously in head
-document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"><\/script>');
+function _getSupabase() {
+  if (_supa) return Promise.resolve(_supa);
+  if (_supaLoading) return _supaLoading;
+  _supaLoading = new Promise(function(resolve) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js';
+    s.onload = function() {
+      _supa = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+      resolve(_supa);
+    };
+    s.onerror = function() { resolve(null); };
+    document.head.appendChild(s);
+  });
+  return _supaLoading;
+}
 
 // Helper: fetch data from Supabase for a carrier
 async function dbFetch(table, carrierId) {
@@ -1632,13 +1646,14 @@ window.portalLogin = async function(){
   err.style.display='none';
 
   // Try Supabase authentication first
-  if(true) { if(!_supa && window.supabase) { _supa = window.supabase.createClient(SUPA_URL, SUPA_KEY); }
+  var supaClient = await _getSupabase();
+  if(supaClient) {
     try {
-      var result = await _supa.auth.signInWithPassword({ email: u, password: p });
+      var result = await supaClient.auth.signInWithPassword({ email: u, password: p });
       if(result.data && result.data.user) {
         var authUser = result.data.user;
         // Fetch user profile from public.users
-        var profile = await _supa
+        var profile = await supaClient
           .from('users')
           .select('*, carriers(name, dot_number, mc_number)')
           .eq('id', authUser.id)
