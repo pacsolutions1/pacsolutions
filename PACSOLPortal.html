@@ -1835,6 +1835,13 @@ function pDashboard(){
   c.units.forEach(function(u){ expiring.push({label:u.id+' — Annual insp',days:dU(u.annualInsp)}); });
   expiring=expiring.filter(function(x){return x.days<=120;}).sort(function(a,b){return a.days-b.days;}).slice(0,6);
 
+  // Normalize smsData field names for dashboard
+  smsData = smsData.map(function(b){
+    b.name  = b.name || b.basic_name || '';
+    b.score = b.score !== undefined ? b.score : (b.percentile || 0);
+    b.threshold = b.threshold || 65;
+    return b;
+  });
   var alerts=smsData.filter(function(b){return b.score>=(b.threshold||65)-10;}).map(function(b){
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e2e8f0">'
       +'<span style="font-size:12px">'+b.name+'</span>'
@@ -1880,6 +1887,10 @@ function pSMS(){
   var c=pActiveCarrier();
   var smsData = (_remsLoaded && _remsSMS) ? _remsSMS : c.sms;
   var rows=smsData.map(function(b){
+    // Support both demo (name, score) and Supabase (basic_name, percentile) field names
+    b.name      = b.name      || b.basic_name  || '';
+    b.score     = b.score     !== undefined ? b.score : (b.percentile || 0);
+    b.threshold = b.threshold || 65;
     var col=b.score>=b.threshold?'#c0392b':(b.score>=(b.threshold||65)-10)?'#d68910':'#1e8449';
     return '<div class="p-card" style="margin-bottom:10px">'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
@@ -1905,6 +1916,11 @@ function pInspections(){
   var c=pActiveCarrier();
   var inspData = (_remsLoaded && _remsInspections) ? _remsInspections : c.inspections;
   var rows=inspData.map(function(i){
+    // Support both demo (vlist, date) and Supabase (inspection_date, no vlist) field names
+    i.date = i.date || i.inspection_date || '';
+    i.driver = i.driver || i.driver_name || '';
+    i.unit = i.unit || i.unit_id || '';
+    i.vlist = i.vlist || [];
     var hasV=i.vlist.length>0;
     var mainRow='<tr style="cursor:'+(hasV?'pointer':'default')+';background:'+(pExpandedInsp===i.id?'#f8fafc':'transparent')+'"'
       +(hasV?' onclick="pToggleInsp(this)" data-id="'+i.id+'"':'')+' >'
@@ -1957,17 +1973,28 @@ function pUnitsHTML(){
   var c=pActiveCarrier();
   var vehiclesData = (_remsLoaded && _remsVehicles) ? _remsVehicles : c.units;
   var cards=vehiclesData.map(function(u){
-    var d=dU(u.annualInsp);
-    var dc=d<60?'#c0392b':d<120?'#d68910':'inherit';
+    // Support both demo and Supabase field names
+    var uid      = u.unit_id  || u.id    || '';
+    var plate    = u.plate    || '';
+    var pstate   = u.plate_state || u.state || '';
+    var utype    = u.type     || 'Tractor';
+    var ustatus  = u.status   || 'Active';
+    var annInsp  = u.annual_insp || u.annualInsp || '';
+    var regExp   = u.reg_exp  || u.regExp || '';
+    var uvin     = u.vin      || '';
+    var uyear    = u.year     || '';
+    var umake    = u.make     || '';
+    var d        = annInsp ? dU(annInsp) : 999;
+    var dc       = d<60?'#c0392b':d<120?'#d68910':'inherit';
     return '<div class="p-card"><div style="display:flex;justify-content:space-between;margin-bottom:8px">'
-      +'<div style="font-size:14px;font-weight:600">'+u.id+'</div>'
-      +bdg(u.status==='Active'?'#1e8449':'#d68910',u.status)+'</div>'
-      +'<div style="font-size:12px;color:#64748b;margin-bottom:10px">'+u.year+' '+u.make+' — '+u.type+'</div>'
+      +'<div style="font-size:14px;font-weight:600">'+(uid||plate)+'</div>'
+      +bdg(ustatus==='Active'?'#1e8449':'#d68910',ustatus)+'</div>'
+      +'<div style="font-size:12px;color:#64748b;margin-bottom:10px">'+(uyear?uyear+' ':'')+umake+(umake?' — ':'')+utype+'</div>'
       +'<div style="font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:5px">'
-      +'<span style="color:#64748b">VIN:</span><span>'+u.vin+'</span>'
-      +'<span style="color:#64748b">Plate:</span><span>'+u.plate+' ('+u.state+')</span>'
-      +'<span style="color:#64748b">Annual insp:</span><span style="color:'+dc+'">'+u.annualInsp+' '+bdg(dc,d+'d')+'</span>'
-      +'<span style="color:#64748b">Reg expires:</span><span>'+u.regExp+'</span>'
+      +(uvin?'<span style="color:#64748b">VIN:</span><span>'+uvin+'</span>':'')
+      +'<span style="color:#64748b">Plate:</span><span>'+plate+(pstate?' ('+pstate+')':'')+'</span>'
+      +(annInsp?'<span style="color:#64748b">Annual insp:</span><span style="color:'+dc+'">'+annInsp+' '+bdg(dc,d+'d')+'</span>':'')
+      +(regExp?'<span style="color:#64748b">Reg expires:</span><span>'+regExp+'</span>':'')
       +'</div></div>';
   }).join('');
   return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Power Units — '+c.name+' ('+vehiclesData.length+')</div>'
@@ -1979,19 +2006,28 @@ function pDriversHTML(){
   var c=pActiveCarrier();
   var driversData = (_remsLoaded && _remsDrivers) ? _remsDrivers : c.drivers;
   var cards=driversData.map(function(d){
-    var cd=dU(d.cdlExp), md=dU(d.medExp);
-    var ini=d.name.split(' ').map(function(n){return n[0];}).join('');
+    // Support both demo (name, cdlExp) and Supabase (full_name, cdl_exp) field names
+    var name   = d.full_name || d.name || 'Unknown';
+    var cdlNum = d.cdl_number || d.cdl || '';
+    var cdlExp = d.cdl_exp || d.cdlExp || '';
+    var medExp = d.med_cert_exp || d.medExp || '';
+    var mvr    = d.mvr_status || d.mvr || 'Unknown';
+    var viol   = d.violations || 0;
+    var status = d.status || 'Active';
+    var cd     = cdlExp ? dU(cdlExp) : 999;
+    var md     = medExp ? dU(medExp) : 999;
+    var ini    = name.split(' ').map(function(n){return n[0];}).join('').slice(0,2);
     return '<div class="p-card"><div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
       +'<div style="width:40px;height:40px;border-radius:50%;background:#e8eef7;color:#1a3a6b;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+ini+'</div>'
-      +'<div><div style="font-size:14px;font-weight:600">'+d.name+'</div>'
+      +'<div><div style="font-size:14px;font-weight:600">'+name+'</div>'
       +'<div style="display:flex;gap:6px;margin-top:3px">'
-      +bdg(d.status==='Active'?'#1e8449':'#626567',d.status)
-      +bdg(d.violations===0?'#1e8449':d.violations===1?'#d68910':'#c0392b',d.mvr)
+      +bdg(status==='Active'?'#1e8449':'#626567',status)
+      +bdg(viol===0?'#1e8449':viol===1?'#d68910':'#c0392b',mvr)
       +'</div></div></div>'
       +'<div style="font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:5px">'
-      +'<span style="color:#64748b">CDL:</span><span>'+d.cdl+'</span>'
-      +'<span style="color:#64748b">CDL exp:</span><span style="color:'+(cd<60?'#c0392b':cd<120?'#d68910':'inherit')+'">'+d.cdlExp+'</span>'
-      +'<span style="color:#64748b">Med cert exp:</span><span style="color:'+(md<60?'#c0392b':md<120?'#d68910':'inherit')+'">'+d.medExp+'</span>'
+      +'<span style="color:#64748b">CDL:</span><span>'+(cdlNum||'N/A')+'</span>'
+      +'<span style="color:#64748b">CDL exp:</span><span style="color:'+(cd<60?'#c0392b':cd<120?'#d68910':'inherit')+'">'+(cdlExp||'N/A')+'</span>'
+      +'<span style="color:#64748b">Med cert exp:</span><span style="color:'+(md<60?'#c0392b':md<120?'#d68910':'inherit')+'">'+(medExp||'N/A')+'</span>'
       +'</div></div>';
   }).join('');
   return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Drivers — '+c.name+' ('+driversData.length+')</div>'
