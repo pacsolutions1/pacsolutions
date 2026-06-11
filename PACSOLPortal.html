@@ -1419,6 +1419,38 @@ async function loadCarrierData(carrierId) {
   return { sms, inspections, drivers, vehicles, alerts };
 }
 
+
+// ── LOAD REAL DATA FROM SUPABASE ────────────────────────────────────────────
+var _remsSMS         = null;
+var _remsInspections = null;
+var _remsDrivers     = null;
+var _remsVehicles    = null;
+var _remsAlerts      = null;
+var _remsLoaded      = false;
+
+async function loadRemsData(carrierId) {
+  if (!_supa || !carrierId) return;
+  try {
+    var [sms, insp, drv, veh, alrt] = await Promise.all([
+      _supa.from('sms_scores').select('*').eq('carrier_id', carrierId),
+      _supa.from('inspections').select('*').eq('carrier_id', carrierId).order('inspection_date', {ascending: false}).limit(50),
+      _supa.from('drivers').select('*').eq('carrier_id', carrierId),
+      _supa.from('vehicles').select('*').eq('carrier_id', carrierId),
+      _supa.from('alerts').select('*').eq('carrier_id', carrierId).eq('resolved', false),
+    ]);
+    if (sms.data && sms.data.length > 0)   _remsSMS = sms.data;
+    if (insp.data && insp.data.length > 0) _remsInspections = insp.data;
+    if (drv.data && drv.data.length > 0)   _remsDrivers = drv.data;
+    if (veh.data && veh.data.length > 0)   _remsVehicles = veh.data;
+    if (alrt.data)                          _remsAlerts = alrt.data;
+    _remsLoaded = true;
+    console.log('Rems data loaded:', _remsSMS ? _remsSMS.length + ' BASICs' : 'none',
+      _remsInspections ? _remsInspections.length + ' inspections' : 'none');
+  } catch(e) {
+    console.warn('Could not load Supabase data:', e);
+  }
+}
+
 var ALL_CARRIERS = [
   {
     id:'apex', name:'Apex Freight LLC', dot:'3847291', mc:'MC-928471', avatar:'AF', color:'#1a3a6b',
@@ -1667,8 +1699,15 @@ window.portalLogin = async function(){
             pUser = { role: userData.role, company: 'P&A Compliance Solutions', name: userData.full_name };
           } else {
             pIsPA = false;
-            // Find matching carrier in ALL_CARRIERS by dot_number
             var carrierData = userData.carriers;
+            // Store real carrier info from Supabase
+            window._supaCarrier = {
+              id: userData.carrier_id,
+              name: carrierData ? carrierData.name : '',
+              dot: carrierData ? carrierData.dot_number : '',
+              mc: carrierData ? carrierData.mc_number : '',
+            };
+            // Try to match demo carrier, fallback to 0
             var ci = ALL_CARRIERS.findIndex(function(c) {
               return c.dot === (carrierData ? carrierData.dot_number : '');
             });
@@ -1729,7 +1768,14 @@ function pLaunchPortal(){
     sel.style.display='none';
   }
   pUpdateSidebar();
-  pTab('dashboard');
+  // Load real Supabase data if carrier user
+  if (!pIsPA && window._supaCarrier) {
+    loadRemsData(window._supaCarrier.id).then(function() {
+      pTab('dashboard');
+    });
+  } else {
+    pTab('dashboard');
+  }
   pUpdateBadge();
 }
 
@@ -1741,13 +1787,16 @@ window.pSwitchCarrier = function(idx){
 };
 
 function pUpdateSidebar(){
-  var c=pActiveCarrier();
+  var c = pActiveCarrier();
+  var displayName = (!pIsPA && window._supaCarrier) ? window._supaCarrier.name : c.name;
+  var displayDot  = (!pIsPA && window._supaCarrier) ? window._supaCarrier.dot  : c.dot;
+  var displayMc   = (!pIsPA && window._supaCarrier) ? window._supaCarrier.mc   : c.mc;
   var info=document.getElementById('p-sidebar-info');
   var label=document.getElementById('p-role-label');
-  if(info) info.innerHTML='<div style="font-size:13px;font-weight:600;color:#0f172a">'+c.name+'</div>'
-    +'<div style="font-size:11px;color:#64748b;margin-top:2px">DOT# '+c.dot+'</div>'
-    +'<div style="font-size:11px;color:#64748b">'+c.mc+'</div>';
-  if(label) label.textContent=(pIsPA?'P&A Admin':''+pUser.role)+' — '+pUsername;
+  if(info) info.innerHTML='<div style="font-size:13px;font-weight:600;color:#0f172a">'+displayName+'</div>'
+    +'<div style="font-size:11px;color:#64748b;margin-top:2px">DOT# '+displayDot+'</div>'
+    +'<div style="font-size:11px;color:#64748b">'+displayMc+'</div>';
+  if(label) label.textContent=(pIsPA?'P&A Admin':''+pUser.role)+' — '+(pUser.name||pUsername);
 }
 
 // ── tab router ────────────────────────────────────────────────────────────────
@@ -1770,6 +1819,11 @@ window.pTab = function(id){
 // ── dashboard ────────────────────────────────────────────────────────────────
 function pDashboard(){
   var c=pActiveCarrier();
+  // Use real Supabase data if loaded
+  var smsData        = (_remsLoaded && _remsSMS)         ? _remsSMS         : c.sms;
+  var inspData       = (_remsLoaded && _remsInspections) ? _remsInspections : c.inspections;
+  var driversData    = (_remsLoaded && _remsDrivers)     ? _remsDrivers     : c.drivers;
+  var vehiclesData   = (_remsLoaded && _remsVehicles)    ? _remsVehicles    : c.units;
   var expiring=[];
   c.drivers.forEach(function(d){
     expiring.push({label:d.name+' — CDL',      days:dU(d.cdlExp)});
@@ -1778,7 +1832,7 @@ function pDashboard(){
   c.units.forEach(function(u){ expiring.push({label:u.id+' — Annual insp',days:dU(u.annualInsp)}); });
   expiring=expiring.filter(function(x){return x.days<=120;}).sort(function(a,b){return a.days-b.days;}).slice(0,6);
 
-  var alerts=c.sms.filter(function(b){return b.score>=b.threshold-10;}).map(function(b){
+  var alerts=smsData.filter(function(b){return b.score>=(b.threshold||65)-10;}).map(function(b){
     return '<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e2e8f0">'
       +'<span style="font-size:12px">'+b.name+'</span>'
       +bdg(b.score>=b.threshold?'#c0392b':'#d68910',b.score+'th pct')+'</div>';
@@ -1790,7 +1844,7 @@ function pDashboard(){
       +bdg(x.days<30?'#c0392b':'#d68910',x.days+'d')+'</div>';
   }).join('');
 
-  var recRows=c.inspections.slice(0,4).map(function(i){
+  var recRows=inspData.slice(0,4).map(function(i){
     return '<tr style="border-top:1px solid #e2e8f0">'
       +'<td style="padding:7px 8px 7px 0;font-size:12px">'+i.date+'</td>'
       +'<td style="padding:7px 8px 7px 0;font-size:12px">'+i.state+'</td>'
@@ -1801,7 +1855,7 @@ function pDashboard(){
       +'</tr>';
   }).join('');
 
-  return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Safety overview — '+c.name+'</div>'
+  return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Safety overview — '+((!pIsPA&&window._supaCarrier)?window._supaCarrier.name:c.name)+'</div>'
     +'<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">'
     +metric('ISS Score',c.iss,c.iss>=75?'Inspect':c.iss>=50?'Optional':'Pass',c.iss>=75?'#c0392b':c.iss>=50?'#d68910':'#1e8449')
     +metric('Driver OOS %',c.oosDriver+'%','Nat\'l avg 5.51%',c.oosDriver>5.51?'#d68910':'#1e8449')
@@ -1821,8 +1875,9 @@ function pDashboard(){
 // ── SMS ──────────────────────────────────────────────────────────────────────
 function pSMS(){
   var c=pActiveCarrier();
-  var rows=c.sms.map(function(b){
-    var col=b.score>=b.threshold?'#c0392b':b.score>=b.threshold-10?'#d68910':'#1e8449';
+  var smsData = (_remsLoaded && _remsSMS) ? _remsSMS : c.sms;
+  var rows=smsData.map(function(b){
+    var col=b.score>=b.threshold?'#c0392b':(b.score>=(b.threshold||65)-10)?'#d68910':'#1e8449';
     return '<div class="p-card" style="margin-bottom:10px">'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
       +'<div style="flex:1"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
@@ -1845,7 +1900,8 @@ function pSMS(){
 // ── inspections ──────────────────────────────────────────────────────────────
 function pInspections(){
   var c=pActiveCarrier();
-  var rows=c.inspections.map(function(i){
+  var inspData = (_remsLoaded && _remsInspections) ? _remsInspections : c.inspections;
+  var rows=inspData.map(function(i){
     var hasV=i.vlist.length>0;
     var mainRow='<tr style="cursor:'+(hasV?'pointer':'default')+';background:'+(pExpandedInsp===i.id?'#f8fafc':'transparent')+'"'
       +(hasV?' onclick="pToggleInsp(this)" data-id="'+i.id+'"':'')+' >'
@@ -1878,10 +1934,10 @@ function pInspections(){
 
   return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Inspections — '+c.name+'</div>'
     +'<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap">'
-    +metric('Total',c.inspections.length,'24-month period','')
-    +metric('OOS events',c.inspections.filter(function(i){return i.result==='OOS';}).length,'','#c0392b')
-    +metric('Clean',c.inspections.filter(function(i){return i.result==='Pass'&&i.violations===0;}).length,'','#1e8449')
-    +metric('Violations',c.inspections.reduce(function(s,i){return s+i.violations;},0),'','#d68910')
+    +metric('Total',inspData.length,'24-month period','')
+    +metric('OOS events',inspData.filter(function(i){return i.result==='OOS';}).length,'','#c0392b')
+    +metric('Clean',inspData.filter(function(i){return i.result==='Pass'&&i.violations===0;}).length,'','#1e8449')
+    +metric('Violations',inspData.reduce(function(s,i){return s+i.violations;},0),'','#d68910')
     +'</div>'
     +'<div class="p-card"><table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="color:#64748b">'
     +['','ID','Date','State','Level','Driver','Unit','Violations','Result'].map(function(h){return '<th style="text-align:left;padding:4px 8px 10px 0;font-weight:500;border-bottom:1px solid #e2e8f0">'+h+'</th>';}).join('')
@@ -1896,7 +1952,8 @@ window.pToggleInsp=function(el){
 // ── units ────────────────────────────────────────────────────────────────────
 function pUnitsHTML(){
   var c=pActiveCarrier();
-  var cards=c.units.map(function(u){
+  var vehiclesData = (_remsLoaded && _remsVehicles) ? _remsVehicles : c.units;
+  var cards=vehiclesData.map(function(u){
     var d=dU(u.annualInsp);
     var dc=d<60?'#c0392b':d<120?'#d68910':'inherit';
     return '<div class="p-card"><div style="display:flex;justify-content:space-between;margin-bottom:8px">'
@@ -1910,14 +1967,15 @@ function pUnitsHTML(){
       +'<span style="color:#64748b">Reg expires:</span><span>'+u.regExp+'</span>'
       +'</div></div>';
   }).join('');
-  return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Power Units — '+c.name+'</div>'
+  return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Power Units — '+c.name+' ('+vehiclesData.length+')</div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+cards+'</div>';
 }
 
 // ── drivers ──────────────────────────────────────────────────────────────────
 function pDriversHTML(){
   var c=pActiveCarrier();
-  var cards=c.drivers.map(function(d){
+  var driversData = (_remsLoaded && _remsDrivers) ? _remsDrivers : c.drivers;
+  var cards=driversData.map(function(d){
     var cd=dU(d.cdlExp), md=dU(d.medExp);
     var ini=d.name.split(' ').map(function(n){return n[0];}).join('');
     return '<div class="p-card"><div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'
@@ -1933,7 +1991,7 @@ function pDriversHTML(){
       +'<span style="color:#64748b">Med cert exp:</span><span style="color:'+(md<60?'#c0392b':md<120?'#d68910':'inherit')+'">'+d.medExp+'</span>'
       +'</div></div>';
   }).join('');
-  return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Drivers — '+c.name+'</div>'
+  return '<div style="font-size:20px;font-weight:600;margin-bottom:20px">Drivers — '+c.name+' ('+driversData.length+')</div>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'+cards+'</div>';
 }
 
