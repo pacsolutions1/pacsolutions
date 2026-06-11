@@ -1429,7 +1429,8 @@ var _remsAlerts      = null;
 var _remsLoaded      = false;
 
 async function loadRemsData(carrierId) {
-  if (!_supa || !carrierId) return;
+  console.log('loadRemsData called with carrierId:', carrierId);
+  if (!_supa || !carrierId) { console.log('Skipping - no supa or carrierId'); return; }
   try {
     var [sms, insp, drv, veh, alrt] = await Promise.all([
       _supa.from('sms_scores').select('*').eq('carrier_id', carrierId),
@@ -1690,6 +1691,7 @@ window.portalLogin = async function(){
           .select('*, carriers(name, dot_number, mc_number)')
           .eq('id', authUser.id)
           .single();
+        console.log('Profile result:', JSON.stringify(profile));
         if(profile.data) {
           var userData = profile.data;
           pUsername = u;
@@ -1707,6 +1709,7 @@ window.portalLogin = async function(){
               dot: carrierData ? carrierData.dot_number : '',
               mc: carrierData ? carrierData.mc_number : '',
             };
+            console.log('_supaCarrier set:', JSON.stringify(window._supaCarrier));
             // Try to match demo carrier, fallback to 0
             var ci = ALL_CARRIERS.findIndex(function(c) {
               return c.dot === (carrierData ? carrierData.dot_number : '');
